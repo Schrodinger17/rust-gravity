@@ -19,9 +19,30 @@ const FRICTION: f32 = 0.5;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .insert_resource(GameState::Paused)
+        .insert_resource(TimeProgress::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, update_balls)
+        .add_systems(Update, time_progress)
+        .add_systems(
+            Update,
+            update_balls
+                .run_if(resource_exists::<GameState>.and_then(resource_equals(GameState::Running))),
+        )
         .run();
+}
+
+#[derive(Resource, Debug, Clone, PartialEq)]
+enum GameState {
+    Running,
+    Paused,
+}
+
+#[derive(Resource, Debug, Default, Clone)]
+struct TimeProgress {
+    time: f32,
+    frame: u32,
+    frame_forward: u32,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -95,7 +116,7 @@ fn setup(
 ) {
     commands.spawn(Camera2dBundle::default());
 
-    for _ in 0..100 {
+    for _ in 0..10 {
         let random_position = Vec3::new(
             (random::<f32>() - 0.5) * UNIVERSE_WIDTH,
             (random::<f32>() - 0.5) * UNIVERSE_HEIGHT,
@@ -103,8 +124,8 @@ fn setup(
         );
 
         let random_speed = Vec3::new(
-            (random::<f32>() - 0.5) * 2.,
-            (random::<f32>() - 0.5) * 2.,
+            (random::<f32>() - 0.5) * 1.,
+            (random::<f32>() - 0.5) * 1.,
             0.,
         );
 
@@ -115,10 +136,63 @@ fn setup(
             random_speed,
             Vec3::ZERO,
             mass,
-            10.,
+            20.,
             &mut materials,
             &mut meshes,
         ));
+    }
+}
+
+fn time_progress(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut game_state: ResMut<GameState>,
+    mut time_progress: ResMut<TimeProgress>,
+    time: Res<Time>,
+) {
+    if keys.just_pressed(KeyCode::Space) {
+        match *game_state {
+            GameState::Running => {
+                println!("Pause");
+                *game_state = GameState::Paused;
+            }
+            GameState::Paused => {
+                println!("Unpause");
+                *game_state = GameState::Running;
+            }
+        }
+    }
+
+    // Update time before pause
+    if let GameState::Running = *game_state {
+        if time_progress.frame_forward > 0 {
+            time_progress.frame_forward -= 1;
+            if time_progress.frame_forward == 0 {
+                *game_state = GameState::Paused;
+            }
+        }
+    }
+
+    if keys.just_pressed(KeyCode::KeyF) {
+        time_progress.frame_forward += 1;
+        *game_state = GameState::Running;
+    }
+
+    if keys.just_pressed(KeyCode::ArrowRight) {
+        if let GameState::Paused = *game_state {
+            println!("Step forward");
+            *game_state = GameState::Running;
+            time_progress.frame_forward = 60;
+        }
+    }
+
+    // Update time
+    if let GameState::Running = *game_state {
+        time_progress.time += time.delta_seconds();
+        time_progress.frame += 1;
+        println!(
+            "Time: {:.2} s, Frame: {}",
+            time_progress.time, time_progress.frame
+        );
     }
 }
 
@@ -142,6 +216,7 @@ fn update_balls(
             continue;
         }
 
+        // If ball is too slow and too low, stop it
         if ball.speed.norm() < 1. && ball.position.y - ball.size / 2. < -WINDOW_HEIGHT / 2. + 1.0 {
             ball.fixed = true;
             ball.speed = Vec3::ZERO;
@@ -152,6 +227,9 @@ fn update_balls(
         let weight = Vec3::new(0., G, 0.) * ball.mass;
 
         let friction = ball.speed * -1. * FRICTION;
+
+        acceleration += weight;
+        acceleration += friction;
 
         // Attraction
         for other_ball in other_balls.iter() {
@@ -164,14 +242,12 @@ fn update_balls(
             acceleration += force / ball.mass;
         }
 
-        acceleration += weight;
-        acceleration += friction;
-
         ball.speed += acceleration * time.delta_seconds();
 
         let speed = ball.speed;
         ball.position += speed * time.delta_seconds();
 
+        /*
         // Balls collision check
         for other_ball in other_balls.iter() {
             if ball.position == other_ball.position {
@@ -189,6 +265,7 @@ fn update_balls(
                 ball.position -= normal * (size + other_ball.size - distance) / 2.;
             }
         }
+        */
 
         // Update transform
         transform.translation = ball.position * SCALE;
@@ -199,7 +276,7 @@ fn update_balls(
             || transform.translation.y - ball.size / 2. > UNIVERSE_HEIGHT / 2.
             || transform.translation.y + ball.size / 2. < -UNIVERSE_HEIGHT / 2.
         {
-            dbg!("Despawn {:?}", entity_id);
+            //dbg!("Despawn {:?}", entity_id);
             commands.entity(entity_id).despawn();
             continue;
         }
